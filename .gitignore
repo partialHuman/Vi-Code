@@ -1,0 +1,53 @@
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Python bytecode and cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Build and packaging artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# IDE, editor, and OS-specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Environment variables and secrets
+.env
+.env.*
+*.local
+*.secret
+*.key
+
+# Vi-Code runtime artifacts
+.vicode.lock
+
+# Temporary Vivado & EDA output files
+*.log
+*.jou
+*.str
+*.pb
+*.wdb
+*.vcd
+*.dmp
+.Xil/
+hd_visual/
+usage_statistics_webtalk.*
+webtalk.*
