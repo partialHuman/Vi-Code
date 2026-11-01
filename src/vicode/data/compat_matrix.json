@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "note": "Only combinations that were actually run on real Windows 11 + Vivado installations belong here (milestone M0).",
+  "verified": []
+}
