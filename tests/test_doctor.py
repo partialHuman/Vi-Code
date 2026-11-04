@@ -1,11 +1,16 @@
 """Contract tests: ``vicode doctor`` against the fake Vivado (design Section 12.4)."""
 import json
 import os
+import shutil
+import subprocess
 import threading
 import time
+import unittest
+import unittest.mock
 from pathlib import Path
 
-from vicode import config, doctor, jobs
+from vicode import config, doctor, jobs, platform_info
+from vicode.vivado import process
 from vicode.events import EventSink
 from vicode.results import ExitCode
 from tests.support import TempDirTestCase, VALID_MANIFEST, make_fake_vivado
@@ -307,3 +312,84 @@ class ProjectTests(DoctorTestCase):
         (self.tmp / "user.yaml").write_text("bogus: 1\n", encoding="utf-8")
         result, _ = self.run_doctor()
         self.assertEqual(result.vicode_exit_code, ExitCode.USAGE_OR_CONFIG)
+
+    def test_stage_7_unsafe_launcher_batch_validation(self):
+        # Stage 7: Unsafe batch launcher path rejected during launcher validation
+        plat_win = platform_info.detect(system="windows", windows_build=26300, release="11")
+        bad_dir = self.tmp / "Tools & Co" / "bin"
+        bad_dir.mkdir(parents=True, exist_ok=True)
+        bad_launcher = bad_dir / "vivado.bat"
+        bad_launcher.write_text("echo fake", encoding="utf-8")
+        result, _ = self.run_doctor(vivado=str(bad_launcher), platform=plat_win)
+        self.assertEqual(result.vicode_exit_code, ExitCode.ENVIRONMENT)
+        self.assertEqual(result.status, "failed")
+        launcher_check = self.check(result, "vivado_launcher")
+        self.assertIsNotNone(launcher_check)
+        self.assertEqual(launcher_check["status"], "fail")
+        self.assertIn("unsafe for a batch launcher", launcher_check["message"])
+        probe_check = self.check(result, "vivado_probe")
+        self.assertIsNotNone(probe_check)
+        self.assertEqual(probe_check["status"], "skip")
+        self.assertTrue(any("unsafe" in d.message for d in result.diagnostics))
+
+    def test_stage_8_unsafe_argument_during_probe_execution(self):
+        # Stage 8: Launcher is valid (Stage 7 passes), but probe raises UnsafeArgument
+        self.install()
+        self.write_project()
+        with unittest.mock.patch("vicode.doctor.run_tcl", side_effect=process.UnsafeArgument("argument contains unsafe characters (&)")):
+            result, _ = self.run_doctor(project_dir=self.project)
+            self.assertEqual(result.vicode_exit_code, ExitCode.ENVIRONMENT)
+            self.assertEqual(result.status, "failed")
+            launcher_check = self.check(result, "vivado_launcher")
+            self.assertIsNotNone(launcher_check)
+            self.assertEqual(launcher_check["status"], "ok")
+            probe_check = self.check(result, "vivado_probe")
+            self.assertIsNotNone(probe_check)
+            self.assertEqual(probe_check["status"], "fail")
+            self.assertIn("unsafe characters (&)", probe_check["message"])
+            self.assertTrue(any("unsafe" in d.message for d in result.diagnostics))
+
+    def test_filesystem_oserror_during_probe_is_structured(self):
+        self.install()
+        self.write_project()
+        # Block build directory by creating a file named 'build'
+        (self.project / "build").write_text("blocking file", encoding="utf-8")
+        result, _ = self.run_doctor(project_dir=self.project)
+        self.assertEqual(result.vicode_exit_code, ExitCode.ENVIRONMENT)
+        self.assertEqual(result.status, "failed")
+        probe_check = self.check(result, "vivado_probe")
+        self.assertIsNotNone(probe_check)
+        self.assertEqual(probe_check["status"], "fail")
+        self.assertIn("filesystem error during probe", probe_check["message"])
+        self.assertTrue(any("filesystem error during probe" in d.message for d in result.diagnostics))
+
+    @unittest.skipUnless(shutil.which("git"), "git not installed")
+    def test_doctor_git_metadata_trust_boundary(self):
+        self.install()
+        self.write_project()
+        (self.project / ".gitignore").write_text("build/\n", encoding="utf-8")
+        git_cmd = lambda *args: subprocess.run(
+            ["git", "-C", str(self.project), "-c", "user.name=t", "-c", "user.email=t@t", "-c", "core.autocrlf=false", *args],
+            check=True, capture_output=True, text=True
+        )
+        git_cmd("init", "-q")
+        git_cmd("add", ".")
+        git_cmd("commit", "-q", "-m", "initial commit")
+
+        # Untrusted project: Git is not invoked; revision and dirty are None
+        result, _ = self.run_doctor(project_dir=self.project)
+        self.assertEqual(result.details["project"]["git"], {"revision": None, "dirty": None})
+
+        # Trusted project: Git metadata is queried
+        config.add_trusted_project(self.tmp / "user.yaml", self.project)
+        result2, _ = self.run_doctor(project_dir=self.project)
+        git_info = result2.details["project"]["git"]
+        self.assertIsNotNone(git_info["revision"])
+        self.assertEqual(len(git_info["revision"]), 40)
+        self.assertTrue(all(c in "0123456789abcdefABCDEF" for c in git_info["revision"]))
+        self.assertIs(git_info["dirty"], False)
+
+        # Untracked/modified file produces dirty=True
+        (self.project / "extra.txt").write_text("dirty canary", encoding="utf-8")
+        result3, _ = self.run_doctor(project_dir=self.project)
+        self.assertIs(result3.details["project"]["git"]["dirty"], True)
