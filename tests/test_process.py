@@ -1,7 +1,9 @@
 import os
+import subprocess
 import sys
 import threading
 import time
+import unittest.mock
 from pathlib import Path
 
 from vicode.jobs import pid_alive
@@ -80,6 +82,33 @@ class RunProcessTests(TempDirTestCase):
         out = process.run_process([str(self.tmp / "no-such-program")], self.tmp, {})
         self.assertIsNone(out.exit_code)
         self.assertIn("could not start", out.error)
+
+    @unittest.skipUnless(process.IS_WINDOWS, "Windows-specific taskkill resolution test")
+    def test_terminate_tree_invokes_absolute_system32_taskkill_and_never_bare_taskkill(self):
+        proc = unittest.mock.MagicMock()
+        proc.pid = 4321
+        with unittest.mock.patch("subprocess.run") as mock_run:
+            process.terminate_tree(proc)
+            self.assertTrue(mock_run.called, "subprocess.run must be called for taskkill")
+            cmd = mock_run.call_args[0][0]
+            self.assertTrue(
+                cmd[0].lower().endswith(r"\system32\taskkill.exe"),
+                f"Expected absolute System32 taskkill.exe path, got {cmd[0]!r}",
+            )
+            self.assertNotEqual(cmd[0].lower(), "taskkill")
+            self.assertNotEqual(cmd[0].lower(), "taskkill.exe")
+            self.assertEqual(cmd[1:], ["/PID", "4321", "/T", "/F"])
+            proc.kill.assert_called_once()
+
+    @unittest.skipUnless(process.IS_WINDOWS, "Windows-specific taskkill resolution test")
+    def test_terminate_tree_safe_fallback_when_taskkill_missing(self):
+        proc = unittest.mock.MagicMock()
+        proc.pid = 4321
+        with unittest.mock.patch("os.path.isfile", return_value=False):
+            with unittest.mock.patch("subprocess.run") as mock_run:
+                process.terminate_tree(proc)
+                mock_run.assert_not_called()
+                proc.kill.assert_called_once()
 
 
 class EnvironmentTests(TempDirTestCase):

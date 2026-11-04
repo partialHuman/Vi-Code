@@ -10,8 +10,13 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Iterable, Mapping
+
+if sys.platform == "win32":
+    os.environ.setdefault("NoDefaultCurrentDirectoryInExePath", "1")
 
 VERSION_RE = re.compile(r"^(20\d{2})\.(\d)(?:\.\d+)?$")
 
@@ -97,6 +102,36 @@ def resolve_path(path: str, windows: bool) -> Installation | None:
     return None
 
 
+def _is_untrusted_path(
+    file_path: str,
+    cwd: str | Path | None = None,
+    project_dir: str | Path | None = None,
+) -> bool:
+    """True if ``file_path`` matches a planted executable in cwd or inside project_dir."""
+    try:
+        cand_path = Path(os.path.realpath(file_path)).resolve()
+    except OSError:
+        return True
+
+    effective_cwd = cwd or os.getcwd()
+    try:
+        cwd_path = Path(os.path.realpath(str(effective_cwd))).resolve()
+        if cand_path == cwd_path or cand_path.parent == cwd_path:
+            return True
+    except OSError:
+        pass
+
+    if project_dir:
+        try:
+            proj_path = Path(os.path.realpath(str(project_dir))).resolve()
+            if cand_path == proj_path or proj_path in cand_path.parents:
+                return True
+        except OSError:
+            pass
+
+    return False
+
+
 def discover(
     env: Mapping[str, str],
     windows: bool,
@@ -104,6 +139,8 @@ def discover(
     extra_roots: Iterable[str] = (),
     which: Callable[[str], str | None] = shutil.which,
     include_default_roots: bool = True,
+    project_dir: str | Path | None = None,
+    cwd: str | Path | None = None,
 ) -> list[Installation]:
     """Return installations in priority order, de-duplicated by real path."""
     names = launcher_names(windows)
@@ -121,9 +158,12 @@ def discover(
             if os.path.isfile(candidate):
                 ordered.append(Installation(candidate, version_from_path(xilinx_vivado), "XILINX_VIVADO"))
 
+    effective_cwd = cwd or os.getcwd()
     for name in names:
         hit = which(name)
         if hit and os.path.isfile(hit):
+            if _is_untrusted_path(hit, cwd=effective_cwd, project_dir=project_dir):
+                continue
             ordered.append(Installation(hit, version_from_path(os.path.dirname(os.path.dirname(hit))), "PATH"))
 
     scanned: list[Installation] = []
