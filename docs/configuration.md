@@ -58,5 +58,4 @@ trusted_projects: ["C:/work/blinky"]                   # managed by `vicode proj
 ## Precedence and trust
 
 Highest first: command line (`--vivado`), project manifest (trusted projects only), user configuration, auto-discovery.
-A manifest in an untrusted project cannot select the program Vi-Code runs: the setting is ignored with a warning.
-Run `vicode project trust` in a project you trust to allow it.
+A manifest in an untrusted project cannot select the program Vi-Code runs: the setting is ignored with a warning. Furthermore, untrusted projects do not execute Git commands for metadata discovery (`jobs.git_state`), preventing untrusted repositories from executing repository-configured Git clean filters. Run `vicode project trust` in a project you trust to allow project-specified Vivado executables and permit Git metadata queries (which can execute repository-defined clean filters).

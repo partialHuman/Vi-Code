@@ -1,4 +1,4 @@
-﻿# Vi-Code 0.1.0 — Release Evidence & Traceability Plan
+# Vi-Code 0.1.0 — Release Evidence & Traceability Plan
 
 **Date:** 2026-11-02
 **Baseline Git Tag:** `v0.1.0`
@@ -16,7 +16,7 @@ All release artifacts, test reports, and verification evidence are cryptographic
 |---|---|---|---|
 | **Git Baseline Tag** | `refs/tags/v0.1.0` | — | `e81f64e18a3fd333c0937d1040b1d9caad935716` |
 | **Initial Wheel Package** | `dist/vicode-0.1.0-py3-none-any.whl` | 34,518 bytes | `1f302e9a59c866d5b8c3add22f6ccbe2d040c1ff26dd536e1817bf26b861ea5f` |
-| **Clean Built Wheel** | `reports/.../vicode-0.1.0-py3-none-any.whl` | 34,559 bytes | Derived from clean `python -m build` (contains zip file timestamp metadata) |
+| **Clean Built Wheel** | `reports/.../vicode-0.1.0-py3-none-any.whl` | Unavailable | Unavailable (clean rebuild artifact not retained in repository) |
 
 ---
 
@@ -24,7 +24,7 @@ All release artifacts, test reports, and verification evidence are cryptographic
 
 All test results recorded in `reports/local-windows-test/TEST_RESULTS.md` map to the 0.1.0 baseline as follows:
 
-* **Commit Verified:** `e81f64e`
+* **Commit Verified:** Tests were executed on 2026-11-01 against the working tree before commit staging; source equivalence to baseline tag `v0.1.0` (`e81f64e18a3fd333c0937d1040b1d9caad935716`) is established via zero diff in tracked sources.
 * **Python Runtime:** Python 3.14.7 (64-bit), Windows AMD64
 * **Dependencies:** `PyYAML 6.0.3` (`pyyaml-6.0.3-cp314-cp314-win_amd64.whl`)
 * **Test Suite Discovered:** 115 tests across 8 modules
@@ -50,11 +50,11 @@ To resolve VIC-REV-003 and adhere strictly to `compat.py` dictionary loading, `s
       "scope": [
         "doctor: discovery",
         "doctor: batch Tcl probe",
-        "doctor: get_parts",
-        "spike: counter synthesis"
+        "doctor: get_parts"
       ],
       "evidence": "Windows 11 build 26300, Python 3.14.7, Vivado 2018.2 (SW Build 2258646), verified 2026-11-01; commit e81f64e",
       "not_verified": [
+        "spike: counter synthesis",
         "implementation",
         "simulation",
         "hardware programming",
@@ -64,6 +64,9 @@ To resolve VIC-REV-003 and adhere strictly to `compat.py` dictionary loading, `s
   ]
 }
 ```
+
+> [!IMPORTANT]
+> **Milestone Status:** Milestone M0 remains explicitly open pending implementation and empirical verification of the counter synthesis spike (VIC-REV-006). "spike: counter synthesis" is tracked under `not_verified` until verified execution evidence is delivered.
 
 ---
 

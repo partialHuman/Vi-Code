@@ -1,4 +1,4 @@
-﻿# Vi-Code 0.1.0 — Remediation & Hardening Plan
+# Vi-Code 0.1.0 — Remediation & Hardening Plan
 
 **Date:** 2026-11-02
 **Target Branch:** `fix/foundation-review`
@@ -169,20 +169,18 @@
 #### Task P2-1: Fix Quadratic Message Parser Backtracking (VIC-REV-019)
 * **Objective:** Eliminate catastrophic backtracking in `messages.py`.
 * **Changes:**
-  * In `src/vicode/vivado/messages.py`, cap line length at 4,096 chars and `rstrip()` before regex matching.
-  * Re-anchor regex pattern `_ID` to prevent backtracking across trailing whitespace:
+  * In `src/vicode/vivado/messages.py`, cap input line length at 4,096 characters and strip trailing whitespace using `rstrip()` prior to regex matching.
+  * Avoid nested quadratic regular expressions. Parse the optional trailing file/line annotation on the bounded substring using linear string partitioning or non-backtracking patterns:
     ```python
-    _ID = re.compile(
-        r"^(?P<sev>INFO|WARNING|CRITICAL WARNING|ERROR):\s+"
-        r"\[(?P<cat>[A-Za-z][A-Za-z0-9]*)\s+(?P<num>[A-Za-z0-9]+-\d+)\]\s*"
-        r"(?P<text>.*?)(?:\s+\[(?P<file>[^\[\]]+?):(?P<line>\d+)\])?$"
-    )
+    MAX_LINE_LENGTH = 4096
+    # Truncate line to bounded length and strip trailing whitespace before matching
+    bounded = line[:MAX_LINE_LENGTH].rstrip()
     ```
 * **Dependencies:** None.
 * **Acceptance Criteria:**
   * A 1 MB line with 50,000 trailing spaces parses in < 0.01 seconds.
   * All existing message parsing test cases continue to pass identically.
-* **Regression Tests:** Unit test with 100,000-character whitespace line asserting parse duration < 0.05s.
+* **Regression Tests:** Unit test with 100,000-character line asserting parse duration < 0.01s.
 
 ---
 
