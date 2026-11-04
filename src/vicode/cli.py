@@ -14,6 +14,9 @@ from vicode import __version__, config, doctor as doctor_mod, scaffold
 from vicode.events import EventSink
 from vicode.results import Diagnostic, ExitCode, OperationResult
 
+if sys.platform == "win32":
+    os.environ.setdefault("NoDefaultCurrentDirectoryInExePath", "1")
+
 # Commands that exist in the CLI skeleton but arrive in later product releases.
 PLANNED: dict[str, str] = {
     "project import": "0.2", "source list": "0.2", "status": "0.2", "cancel": "0.2", "clean": "0.2",
@@ -61,7 +64,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     pr = sub.add_parser("project", help="project commands").add_subparsers(dest="action", metavar="<action>")
     pr.add_parser("validate", parents=[out, proj], help="validate vicode.yaml")
-    pr.add_parser("trust", parents=[out, proj], help="trust this project's executable settings")
+    pr.add_parser("trust", parents=[out, proj],
+                  help="trust project executable settings and permit Git clean filters",
+                  description="Mark project as trusted, allowing project-specified Vivado executables and permitting Git metadata operations to execute repository-defined clean filters.")
     pr.add_parser("import", parents=[out], help="(planned) import an existing Vivado project").add_argument("rest", nargs="*")
 
     for top, actions in (("source", ["list"]), ("tcl", ["export"]), ("vivado", ["open"]),
@@ -93,18 +98,33 @@ def render_text(result: OperationResult) -> str:
 
 
 def _run(args: argparse.Namespace, operation: str, fn: Callable[[EventSink], OperationResult]) -> int:
-    sink = EventSink(stream=sys.stdout if getattr(args, "json_stream", False) else None)
+    is_json_stream = getattr(args, "json_stream", False)
+    is_json = getattr(args, "json", False)
+    sink = EventSink(stream=sys.stdout if is_json_stream else None)
+    is_internal_error = False
     try:
         result = fn(sink)
     except KeyboardInterrupt:
         result = OperationResult(operation, tool=None).finish(ExitCode.CANCELLED, "cancelled")
         sink.finished(result.status, int(ExitCode.CANCELLED), result.to_dict())
-    if getattr(args, "json_stream", False):
+    except Exception as exc:
+        if os.environ.get("VICODE_DEBUG"):
+            raise
+        is_internal_error = True
+        result = OperationResult(operation, tool=None)
+        err_msg = f"internal error: {type(exc).__name__}: {exc}"
+        diag = Diagnostic("error", err_msg, category="internal")
+        result.diagnostics.append(diag)
+        result.finish(ExitCode.FAILED, err_msg)
+        sink.message(diag)
+        sink.finished(result.status, int(ExitCode.FAILED), result.to_dict())
+    if is_json_stream:
         pass  # the events, including job.finished, were already streamed
-    elif getattr(args, "json", False):
+    elif is_json:
         print(json.dumps(result.to_dict(), indent=2))
     else:
-        print(render_text(result))
+        out = sys.stderr if is_internal_error else sys.stdout
+        print(render_text(result), file=out)
     return result.vicode_exit_code
 
 
@@ -233,7 +253,23 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # pragma: no cover - last-resort guard
         if os.environ.get("VICODE_DEBUG"):
             raise
-        print(f"internal error: {exc}. Set VICODE_DEBUG=1 for a traceback.", file=sys.stderr)
+        raw_args = argv if argv is not None else sys.argv[1:]
+        is_stream = "--json-stream" in raw_args
+        is_json = "--json" in raw_args
+        err_msg = f"internal error: {type(exc).__name__}: {exc}"
+        if is_stream or is_json:
+            result = OperationResult("cli", tool=None)
+            diag = Diagnostic("error", err_msg, category="internal")
+            result.diagnostics.append(diag)
+            result.finish(ExitCode.FAILED, err_msg)
+            if is_stream:
+                sink = EventSink(stream=sys.stdout)
+                sink.message(diag)
+                sink.finished(result.status, int(ExitCode.FAILED), result.to_dict())
+            else:
+                print(json.dumps(result.to_dict(), indent=2))
+        else:
+            print(f"{err_msg}. Set VICODE_DEBUG=1 for a traceback.", file=sys.stderr)
         return int(ExitCode.FAILED)
 
 
