@@ -14,7 +14,7 @@ from typing import Any, Callable, Mapping
 from vicode import compat, config, jobs, platform_info
 from vicode.events import EventSink
 from vicode.results import Diagnostic, ExitCode, OperationResult
-from vicode.vivado import discovery, messages, tcl
+from vicode.vivado import discovery, messages, process, tcl
 from vicode.vivado.runner import run_tcl
 
 MIN_PYTHON = (3, 11)
@@ -133,7 +133,8 @@ def run_doctor(opts: DoctorOptions, sink: EventSink) -> OperationResult:
         installs = discovery.discover(
             env, plat.is_windows, None,
             extra_roots=tuple(opts.extra_roots) + tuple(user.config.search_paths),
-            which=opts.which, include_default_roots=opts.include_default_roots)
+            which=opts.which, include_default_roots=opts.include_default_roots,
+            project_dir=root, cwd=opts.cwd)
         if not installs:
             add("vivado_discovery", "fail", "no Vivado installation found",
                 "Install Vivado, add it to PATH, set XILINX_VIVADO, pass --vivado PATH, or set vivado.executable in your user configuration")
@@ -152,7 +153,16 @@ def run_doctor(opts: DoctorOptions, sink: EventSink) -> OperationResult:
         launcher_ok = os.path.isfile(selected.launcher) and (
             plat.is_windows or os.access(selected.launcher, os.X_OK))
         if launcher_ok:
-            add("vivado_launcher", "ok", "launcher exists and is executable")
+            if plat.is_windows and process.needs_batch_validation(selected.launcher):
+                try:
+                    process.validate_batch_args([selected.launcher])
+                    add("vivado_launcher", "ok", "launcher exists and is executable")
+                except process.UnsafeArgument as exc:
+                    add("vivado_launcher", "fail", str(exc),
+                        "Move Vivado to a path without special characters or pass a clean path")
+                    selected = None
+            else:
+                add("vivado_launcher", "ok", "launcher exists and is executable")
         else:
             add("vivado_launcher", "fail", f"{selected.launcher} is not an executable file")
             selected = None
@@ -186,9 +196,20 @@ def run_doctor(opts: DoctorOptions, sink: EventSink) -> OperationResult:
         except jobs.ProjectBusy as exc:
             add("vivado_probe", "fail", str(exc), "Wait for the other job to finish, or run 'vicode cancel'")
             run = None
+        except process.UnsafeArgument as exc:
+            add("vivado_probe", "fail", str(exc),
+                "Rename the path or move the project to a location without special characters")
+            run = None
+        except OSError as exc:
+            add("vivado_probe", "fail", f"filesystem error during probe: {exc}",
+                "Check permissions or path accessibility")
+            run = None
         finally:
             if lock:
-                lock.release()
+                try:
+                    lock.release()
+                except OSError:
+                    pass
         if run is not None:
             result.exit_code = run.outcome.exit_code
             result.logs.append(_rel(run.log, root))
@@ -240,8 +261,12 @@ def run_doctor(opts: DoctorOptions, sink: EventSink) -> OperationResult:
         result.details["selected"] = {"launcher": selected.launcher, "version": selected.version,
                                       "source": selected.source}
     if root is not None and project_cfg is not None:
+        trusted = config.is_trusted(root, user.config)
         result.details["project"] = {
-            "root": str(root), "config_hash": jobs.config_hash(project_cfg.resolved()), "git": jobs.git_state(root)}
+            "root": str(root),
+            "config_hash": jobs.config_hash(project_cfg.resolved()),
+            "git": jobs.git_state(root, trusted=trusted),
+        }
 
     if cancelled:
         code, summary = ExitCode.CANCELLED, "doctor was cancelled"
@@ -256,9 +281,12 @@ def run_doctor(opts: DoctorOptions, sink: EventSink) -> OperationResult:
     result.finish(code, summary)
 
     if root is not None:
-        out_layout = jobs.build_layout(root)
-        result.details["result_path"] = _rel(jobs.result_path(out_layout, "doctor"), root)
-        jobs.write_result(out_layout, result)
+        try:
+            out_layout = jobs.build_layout(root)
+            result.details["result_path"] = _rel(jobs.result_path(out_layout, "doctor"), root)
+            jobs.write_result(out_layout, result)
+        except OSError as exc:
+            add("result_record", "warn", f"could not write doctor result record: {exc}")
     sink.finished(result.status, int(code), result.to_dict(), result.details.get("result_path"))
     return result
 

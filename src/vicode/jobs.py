@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -132,12 +134,64 @@ def config_hash(resolved: dict[str, Any]) -> str:
     return hashlib.sha256(blob).hexdigest()
 
 
-def git_state(path: Path) -> dict[str, Any]:
-    """Source revision and uncommitted-changes flag; never raises."""
+def _safe_git_command(repo_path: Path) -> str | None:
+    git_bin = shutil.which("git")
+    if git_bin:
+        try:
+            git_real = Path(os.path.realpath(git_bin)).resolve()
+            cwd_real = Path(os.path.realpath(os.getcwd())).resolve()
+            repo_real = Path(os.path.realpath(str(repo_path))).resolve()
+            if (
+                git_real == cwd_real
+                or git_real.parent == cwd_real
+                or git_real == repo_real
+                or repo_real in git_real.parents
+            ):
+                git_bin = None
+        except OSError:
+            git_bin = None
+    if not git_bin and sys.platform == "win32":
+        for prefix in (os.environ.get("ProgramFiles", r"C:\Program Files"),
+                       os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")):
+            candidate = Path(prefix) / "Git" / "cmd" / "git.exe"
+            if candidate.is_file():
+                git_bin = str(candidate)
+                break
+    return git_bin
+
+
+def git_state(path: Path, trusted: bool = False) -> dict[str, Any]:
+    """Source revision and uncommitted-changes flag for trusted projects; never raises."""
+    if not trusted:
+        return {"revision": None, "dirty": None}
+
+    git_bin = _safe_git_command(path)
+    if not git_bin:
+        return {"revision": None, "dirty": None}
+
+    git_env = dict(os.environ)
+    git_env["GIT_CONFIG_NOSYSTEM"] = "1"
+    git_env["GIT_TERMINAL_PROMPT"] = "0"
+
     def git(*args: str) -> str | None:
         try:
-            done = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True,
-                                  timeout=10, check=False)
+            cmd = [
+                git_bin,
+                "-c", "core.fsmonitor=false",
+                "-c", "core.useBuiltinFSMonitor=false",
+                "-c", "core.hooksPath=",
+                "--no-optional-locks",
+                "-C", str(path),
+                *args,
+            ]
+            done = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                env=git_env,
+                timeout=10,
+                check=False,
+            )
         except (OSError, subprocess.SubprocessError):
             return None
         return done.stdout.strip() if done.returncode == 0 else None

@@ -80,11 +80,14 @@ class RunOutcome:
 def terminate_tree(proc: subprocess.Popen, grace: float = 3.0) -> None:
     """Terminate ``proc`` and everything it started."""
     if IS_WINDOWS:
-        try:
-            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                           capture_output=True, timeout=20, check=False)
-        except (OSError, subprocess.SubprocessError):
-            pass
+        system_root = os.environ.get("SystemRoot") or os.environ.get("SYSTEMROOT") or r"C:\Windows"
+        taskkill_bin = os.path.join(system_root, "System32", "taskkill.exe")
+        if os.path.isfile(taskkill_bin):
+            try:
+                subprocess.run([taskkill_bin, "/PID", str(proc.pid), "/T", "/F"],
+                               capture_output=True, timeout=20, check=False)
+            except (OSError, subprocess.SubprocessError):
+                pass
         try:
             proc.kill()
         except OSError:

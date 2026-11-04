@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+import unittest
 from pathlib import Path
 
 from vicode import cli, config
@@ -173,3 +174,83 @@ class DoctorCliTests(TempDirTestCase):
         (self.tmp / "vicode.yaml").write_text("schema_version: 1\n", encoding="utf-8")
         code, out, _ = run_cli(["doctor", "--no-launch"], cwd=self.tmp, env=self.env)
         self.assertEqual(code, ExitCode.USAGE_OR_CONFIG, out)
+
+    @unittest.skipUnless(os.name == "nt", "Windows batch argument validation test")
+    def test_doctor_unsafe_argument_returns_structured_json(self):
+        unsafe_dir = self.tmp / "Tools & Co" / "bin"
+        unsafe_dir.mkdir(parents=True, exist_ok=True)
+        unsafe_launcher = unsafe_dir / "vivado.bat"
+        unsafe_launcher.write_text("echo fake", encoding="utf-8")
+        code, out, _ = run_cli(["doctor", "--vivado", str(unsafe_launcher), "--json"], cwd=self.tmp, env=self.env)
+        self.assertNotEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(data["protocol"], 1)
+        self.assertEqual(data["status"], "failed")
+        self.assertTrue(any("unsafe" in d["message"] for d in data["diagnostics"]))
+
+    @unittest.skipUnless(os.name == "nt", "Windows batch argument validation test")
+    def test_doctor_unsafe_argument_returns_structured_json_stream(self):
+        unsafe_dir = self.tmp / "Tools & Co" / "bin"
+        unsafe_dir.mkdir(parents=True, exist_ok=True)
+        unsafe_launcher = unsafe_dir / "vivado.bat"
+        unsafe_launcher.write_text("echo fake", encoding="utf-8")
+        code, out, _ = run_cli(["doctor", "--vivado", str(unsafe_launcher), "--json-stream"], cwd=self.tmp, env=self.env)
+        self.assertNotEqual(code, 0)
+        events = [json.loads(line) for line in out.splitlines()]
+        self.assertEqual(events[-1]["event"], "job.finished")
+        self.assertEqual(events[-1]["result"]["status"], "failed")
+
+    def test_cli_run_exception_fallback(self):
+        from unittest.mock import patch
+        with patch("vicode.doctor.run_doctor", side_effect=RuntimeError("runner disaster")):
+            # JSON mode: structured JSON on stdout with operation="doctor"
+            code, out, err = run_cli(["doctor", "--json"], cwd=self.tmp, env=self.env)
+            self.assertEqual(code, ExitCode.FAILED)
+            data = json.loads(out)
+            self.assertEqual(data["operation"], "doctor")
+            self.assertEqual(data["status"], "failed")
+            self.assertEqual(data["protocol"], 1)
+            self.assertIn("internal error: RuntimeError", data["summary"])
+            self.assertTrue(any("runner disaster" in d["message"] for d in data["diagnostics"]))
+
+            # JSON-stream mode: structured JSON lines on stdout with operation="doctor"
+            code, out, err = run_cli(["doctor", "--json-stream"], cwd=self.tmp, env=self.env)
+            self.assertEqual(code, ExitCode.FAILED)
+            events = [json.loads(line) for line in out.splitlines()]
+            self.assertEqual(events[-1]["event"], "job.finished")
+            self.assertEqual(events[-1]["result"]["operation"], "doctor")
+            self.assertEqual(events[-1]["result"]["status"], "failed")
+            self.assertTrue(any("runner disaster" in d["message"] for d in events[-1]["result"]["diagnostics"]))
+
+            # Text mode: error output directed to stderr with operation context
+            code, out, err = run_cli(["doctor"], cwd=self.tmp, env=self.env)
+            self.assertEqual(code, ExitCode.FAILED)
+            self.assertIn("doctor: internal error", err)
+            self.assertIn("runner disaster", err)
+
+    def test_cli_main_exception_fallback(self):
+        from unittest.mock import patch
+        with patch("vicode.cli.cmd_doctor", side_effect=RuntimeError("dispatch disaster")):
+            # JSON mode: structured JSON on stdout with operation="cli"
+            code, out, err = run_cli(["doctor", "--json"], cwd=self.tmp, env=self.env)
+            self.assertEqual(code, ExitCode.FAILED)
+            data = json.loads(out)
+            self.assertEqual(data["operation"], "cli")
+            self.assertEqual(data["status"], "failed")
+            self.assertEqual(data["protocol"], 1)
+            self.assertTrue(any("dispatch disaster" in d["message"] for d in data["diagnostics"]))
+
+            # JSON-stream mode: structured JSON lines on stdout with operation="cli"
+            code, out, err = run_cli(["doctor", "--json-stream"], cwd=self.tmp, env=self.env)
+            self.assertEqual(code, ExitCode.FAILED)
+            events = [json.loads(line) for line in out.splitlines()]
+            self.assertEqual(events[-1]["event"], "job.finished")
+            self.assertEqual(events[-1]["result"]["operation"], "cli")
+            self.assertEqual(events[-1]["result"]["status"], "failed")
+            self.assertTrue(any("dispatch disaster" in d["message"] for d in events[-1]["result"]["diagnostics"]))
+
+            # Text mode: writes to stderr with traceback hint
+            code, out, err = run_cli(["doctor"], cwd=self.tmp, env=self.env)
+            self.assertEqual(code, ExitCode.FAILED)
+            self.assertIn("dispatch disaster", err)
+            self.assertIn("Set VICODE_DEBUG=1", err)

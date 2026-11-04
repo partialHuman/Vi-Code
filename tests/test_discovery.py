@@ -98,3 +98,34 @@ class DiscoverTests(TempDirTestCase):
         launcher = make_launcher(self.tmp / "Vivado" / "2023.2" / "bin" / "vivado")
         inst = discovery.resolve_path(str(launcher), False)
         self.assertEqual(Path(inst.root), launcher.parent.parent)
+
+    def test_planted_cwd_launcher_is_ignored_by_which(self):
+        planted = make_launcher(self.tmp / "vivado.bat")
+        found = discovery.discover({}, True, which=lambda n: str(planted),
+                                   include_default_roots=False, cwd=self.tmp)
+        self.assertEqual(found, [])
+
+    def test_planted_project_dir_launcher_is_ignored_by_which(self):
+        proj_dir = self.tmp / "proj"
+        planted = make_launcher(proj_dir / "bin" / "vivado.bat")
+        found = discovery.discover({}, True, which=lambda n: str(planted),
+                                   include_default_roots=False, project_dir=proj_dir,
+                                   cwd=self.tmp / "other")
+        self.assertEqual(found, [])
+
+    def test_explicit_configured_launcher_in_cwd_is_honored(self):
+        planted = make_launcher(self.tmp / "vivado.bat")
+        found = discovery.discover({}, True, configured=str(planted),
+                                   include_default_roots=False, cwd=self.tmp)
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].source, "configured")
+        self.assertEqual(Path(found[0].launcher), planted)
+
+    def test_legitimate_path_tool_beneath_cwd_is_not_rejected(self):
+        # Tools in nested folders beneath CWD (e.g. tools/ or .local/) must not be falsely rejected
+        legit = make_launcher(self.tmp / "tools" / "Vivado" / "2023.2" / "bin" / "vivado.bat")
+        found = discovery.discover({}, True, which=lambda n: str(legit),
+                                   include_default_roots=False, cwd=self.tmp)
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].source, "PATH")
+        self.assertEqual(Path(found[0].launcher), legit)
